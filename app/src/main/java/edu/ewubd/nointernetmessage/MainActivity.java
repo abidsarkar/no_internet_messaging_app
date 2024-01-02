@@ -1,71 +1,121 @@
 package edu.ewubd.nointernetmessage;
 
-import androidx.appcompat.app.AppCompatActivity;
-
+import android.Manifest;
 import android.bluetooth.BluetoothAdapter;
 import android.bluetooth.BluetoothDevice;
 import android.content.BroadcastReceiver;
 import android.content.Context;
 import android.content.Intent;
 import android.content.IntentFilter;
+import android.content.pm.PackageManager;
 import android.os.Bundle;
+import android.view.View;
 import android.widget.Button;
+import android.widget.EditText;
 import android.widget.TextView;
+import android.widget.Toast;
+
+import androidx.annotation.NonNull;
+import androidx.appcompat.app.AppCompatActivity;
+import androidx.core.app.ActivityCompat;
+import androidx.core.content.ContextCompat;
+
+import java.util.ArrayList;
+import java.util.List;
 
 public class MainActivity extends AppCompatActivity {
 
+    private static final int REQUEST_ENABLE_BLUETOOTH = 1;
+    private static final int REQUEST_DISCOVERABLE_BLUETOOTH = 2;
+    private static final int PERMISSION_REQUEST_CODE = 3;
+
     private BluetoothAdapter bluetoothAdapter;
-    private Button sendMessageButton;
-    private TextView statusText;
+    private List<BluetoothDevice> discoveredDevices = new ArrayList<>();
+    private TextView chatTextView;
+    private EditText messageEditText;
+    private Button sendButton;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
         setContentView(R.layout.activity_main);
 
-        // Initialize UI elements
-        sendMessageButton = findViewById(R.id.send_message_button);
-        statusText = findViewById(R.id.status_text);
+        chatTextView = findViewById(R.id.chatTextView);
+        messageEditText = findViewById(R.id.messageEditText);
+        sendButton = findViewById(R.id.sendButton);
 
-        // Get Bluetooth adapter
         bluetoothAdapter = BluetoothAdapter.getDefaultAdapter();
 
-        // Check Bluetooth availability
         if (bluetoothAdapter == null) {
-            statusText.setText("Bluetooth not available");
+            Toast.makeText(this, "Bluetooth not available on this device", Toast.LENGTH_SHORT).show();
+            finish();
         } else {
-            updateStatusText();
+            checkBluetoothPermissions();
+            registerBluetoothReceiver();
+            ensureBluetoothEnabled();
+            ensureDiscoverable();
         }
 
-        // Set up button click listener
-        sendMessageButton.setOnClickListener(v -> {
-            sendEmergencyMessage();
+        sendButton.setOnClickListener(new View.OnClickListener() {
+            @Override
+            public void onClick(View view) {
+                sendMessage();
+            }
         });
     }
 
-    private void updateStatusText() {
-        if (bluetoothAdapter.isEnabled()) {
-            statusText.setText("Bluetooth enabled");
-        } else {
-            statusText.setText("Bluetooth disabled");
+    private void checkBluetoothPermissions() {
+        if (ContextCompat.checkSelfPermission(this, Manifest.permission.BLUETOOTH) != PackageManager.PERMISSION_GRANTED ||
+                ContextCompat.checkSelfPermission(this, Manifest.permission.BLUETOOTH_ADMIN) != PackageManager.PERMISSION_GRANTED ||
+                ContextCompat.checkSelfPermission(this, Manifest.permission.BLUETOOTH_CONNECT) != PackageManager.PERMISSION_GRANTED) {
+            ActivityCompat.requestPermissions(this,
+                    new String[]{Manifest.permission.BLUETOOTH, Manifest.permission.BLUETOOTH_ADMIN, Manifest.permission.BLUETOOTH_CONNECT},
+                    PERMISSION_REQUEST_CODE);
         }
     }
 
-    private void sendEmergencyMessage() {
-        // Check Bluetooth enabled
-        if (!bluetoothAdapter.isEnabled()) {
-            Intent enableBtIntent = new Intent(BluetoothAdapter.ACTION_REQUEST_ENABLE);
-            startActivityForResult(enableBtIntent, 1);
-        } else {
-            // Start discovery and broadcasting
-            bluetoothAdapter.startDiscovery();
-            IntentFilter filter = new IntentFilter(BluetoothDevice.ACTION_FOUND);
-            registerReceiver(receiver, filter);
+    private void registerBluetoothReceiver() {
+        IntentFilter filter = new IntentFilter(BluetoothDevice.ACTION_FOUND);
+        registerReceiver(receiver, filter);
+    }
 
-            // Placeholder for broadcasting message
-            statusText.setText("Broadcasting emergency message...");
-            // Implement the logic to send the message to a discovered device here
-            // For example, you can use BluetoothSocket and OutputStream
+    private void ensureBluetoothEnabled() {
+        if (!bluetoothAdapter.isEnabled()) {
+            if (ContextCompat.checkSelfPermission(this, Manifest.permission.BLUETOOTH_CONNECT) == PackageManager.PERMISSION_GRANTED) {
+                Intent enableBtIntent = new Intent(BluetoothAdapter.ACTION_REQUEST_ENABLE);
+                startActivityForResult(enableBtIntent, REQUEST_ENABLE_BLUETOOTH);
+            } else {
+                // Request Bluetooth permissions or inform the user
+                ActivityCompat.requestPermissions(this,
+                        new String[]{Manifest.permission.BLUETOOTH_CONNECT},
+                        PERMISSION_REQUEST_CODE);
+            }
+        }
+    }
+
+    private void ensureDiscoverable() {
+        if (ContextCompat.checkSelfPermission(this, Manifest.permission.BLUETOOTH_SCAN) == PackageManager.PERMISSION_GRANTED) {
+            if (bluetoothAdapter.getScanMode() != BluetoothAdapter.SCAN_MODE_CONNECTABLE_DISCOVERABLE) {
+                Intent discoverableIntent = new Intent(BluetoothAdapter.ACTION_REQUEST_DISCOVERABLE);
+                discoverableIntent.putExtra(BluetoothAdapter.EXTRA_DISCOVERABLE_DURATION, 300); // 5 minutes
+                startActivityForResult(discoverableIntent, REQUEST_DISCOVERABLE_BLUETOOTH);
+            }
+        } else {
+            // Request Bluetooth permissions or inform the user
+            ActivityCompat.requestPermissions(this,
+                    new String[]{Manifest.permission.BLUETOOTH_SCAN},
+                    PERMISSION_REQUEST_CODE);
+        }
+    }
+
+    private void sendMessage() {
+        String message = messageEditText.getText().toString();
+        if (!message.isEmpty()) {
+            // Implement logic to send the message to all connected devices
+            // You might need to iterate through the list of discovered devices and send the message using BluetoothSocket and OutputStream
+            // Display the sent message in the chatTextView
+            chatTextView.append("You: " + message + "\n");
+            messageEditText.setText("");
         }
     }
 
@@ -75,32 +125,41 @@ public class MainActivity extends AppCompatActivity {
             String action = intent.getAction();
             if (BluetoothDevice.ACTION_FOUND.equals(action)) {
                 BluetoothDevice device = intent.getParcelableExtra(BluetoothDevice.EXTRA_DEVICE);
-                // Send message to discovered device (implement this based on your requirements)
+                if (!discoveredDevices.contains(device)) {
+                    discoveredDevices.add(device);
+                    // Implement logic to receive and display the message from the discovered device
+                    // You might need to use BluetoothSocket and InputStream
+                    if (ContextCompat.checkSelfPermission(MainActivity.this, Manifest.permission.BLUETOOTH_CONNECT) == PackageManager.PERMISSION_GRANTED) {
+                        chatTextView.append(device.getName() + ": " + "Hello, I'm here!" + "\n");
+                    } else {
+                        // Request Bluetooth permissions or inform the user
+                        ActivityCompat.requestPermissions(MainActivity.this,
+                                new String[]{Manifest.permission.BLUETOOTH_CONNECT},
+                                PERMISSION_REQUEST_CODE);
+                    }
+                }
             }
         }
     };
 
     @Override
-    protected void onActivityResult(int requestCode, int resultCode, Intent data) {
-        super.onActivityResult(requestCode, resultCode, data);
-        if (requestCode == 1) {
-            if (resultCode == RESULT_OK) {
-                // Bluetooth has been enabled, proceed with your logic
-                // You might want to start discovery and broadcast the message here
-                bluetoothAdapter.startDiscovery();
-                IntentFilter filter = new IntentFilter(BluetoothDevice.ACTION_FOUND);
-                registerReceiver(receiver, filter);
-                statusText.setText("Broadcasting emergency message...");
-            } else {
-                // User declined to enable Bluetooth, handle accordingly
-                statusText.setText("Bluetooth not enabled");
-            }
-        }
-    }
-
-    @Override
     protected void onDestroy() {
         super.onDestroy();
         unregisterReceiver(receiver);
+    }
+
+    @Override
+    public void onRequestPermissionsResult(int requestCode, @NonNull String[] permissions, @NonNull int[] grantResults) {
+        super.onRequestPermissionsResult(requestCode, permissions, grantResults);
+
+        if (requestCode == PERMISSION_REQUEST_CODE) {
+            for (int result : grantResults) {
+                if (result != PackageManager.PERMISSION_GRANTED) {
+                    Toast.makeText(this, "Bluetooth permissions are required", Toast.LENGTH_SHORT).show();
+                    finish();
+                    return;
+                }
+            }
+        }
     }
 }
