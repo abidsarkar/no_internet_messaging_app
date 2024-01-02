@@ -3,36 +3,49 @@ package edu.ewubd.nointernetmessage;
 import android.Manifest;
 import android.bluetooth.BluetoothAdapter;
 import android.bluetooth.BluetoothDevice;
+import android.bluetooth.BluetoothSocket;
 import android.content.BroadcastReceiver;
 import android.content.Context;
 import android.content.Intent;
 import android.content.IntentFilter;
 import android.content.pm.PackageManager;
+import android.os.AsyncTask;
 import android.os.Bundle;
 import android.view.View;
+import android.widget.ArrayAdapter;
 import android.widget.Button;
 import android.widget.EditText;
-import android.widget.TextView;
+import android.widget.ListView;
 import android.widget.Toast;
-
 import androidx.annotation.NonNull;
 import androidx.appcompat.app.AppCompatActivity;
 import androidx.core.app.ActivityCompat;
 import androidx.core.content.ContextCompat;
-
+import java.io.IOException;
+import java.io.InputStream;
+import java.io.OutputStream;
 import java.util.ArrayList;
-import java.util.List;
+import java.util.Set;
+import java.util.UUID;
+
+import edu.ewubd.nointernetmessage.R;
 
 public class MainActivity extends AppCompatActivity {
 
     private static final int REQUEST_ENABLE_BLUETOOTH = 1;
-    private static final int REQUEST_DISCOVERABLE_BLUETOOTH = 2;
-    private static final int PERMISSION_REQUEST_CODE = 3;
+    private static final int PERMISSION_REQUEST_CODE = 2;
+    private static final UUID MY_UUID = UUID.fromString("00001101-0000-1000-8000-00805F9B34FB");
 
     private BluetoothAdapter bluetoothAdapter;
-    private List<BluetoothDevice> discoveredDevices = new ArrayList<>();
-    private TextView chatTextView;
+    private ArrayAdapter<String> discoveredDevicesAdapter;
+    private ArrayList<BluetoothDevice> discoveredDevices = new ArrayList<>();
+    private BluetoothSocket clientSocket;
+    private InputStream inputStream;
+    private OutputStream outputStream;
+
     private EditText messageEditText;
+    private ListView devicesListView;
+    private Button discoverButton;
     private Button sendButton;
 
     @Override
@@ -40,25 +53,32 @@ public class MainActivity extends AppCompatActivity {
         super.onCreate(savedInstanceState);
         setContentView(R.layout.activity_main);
 
-        chatTextView = findViewById(R.id.chatTextView);
         messageEditText = findViewById(R.id.messageEditText);
+        devicesListView = findViewById(R.id.devicesListView);
+        discoverButton = findViewById(R.id.discoverButton);
         sendButton = findViewById(R.id.sendButton);
 
         bluetoothAdapter = BluetoothAdapter.getDefaultAdapter();
+        discoveredDevicesAdapter = new ArrayAdapter<>(this, android.R.layout.simple_list_item_1);
+        devicesListView.setAdapter(discoveredDevicesAdapter);
 
-        if (bluetoothAdapter == null) {
-            Toast.makeText(this, "Bluetooth not available on this device", Toast.LENGTH_SHORT).show();
-            finish();
-        } else {
-            checkBluetoothPermissions();
-            registerBluetoothReceiver();
-            ensureBluetoothEnabled();
-            ensureDiscoverable();
-        }
+        checkBluetoothPermissions();
+        registerBluetoothReceiver();
+
+        discoverButton.setOnClickListener(new View.OnClickListener() {
+            @Override
+            public void onClick(View v) {
+                discoverDevices();
+            }
+        });
+
+        devicesListView.setOnItemClickListener((parent, view, position, id) -> {
+            connectToDevice(discoveredDevices.get(position));
+        });
 
         sendButton.setOnClickListener(new View.OnClickListener() {
             @Override
-            public void onClick(View view) {
+            public void onClick(View v) {
                 sendMessage();
             }
         });
@@ -79,43 +99,26 @@ public class MainActivity extends AppCompatActivity {
         registerReceiver(receiver, filter);
     }
 
-    private void ensureBluetoothEnabled() {
-        if (!bluetoothAdapter.isEnabled()) {
-            if (ContextCompat.checkSelfPermission(this, Manifest.permission.BLUETOOTH_CONNECT) == PackageManager.PERMISSION_GRANTED) {
-                Intent enableBtIntent = new Intent(BluetoothAdapter.ACTION_REQUEST_ENABLE);
-                startActivityForResult(enableBtIntent, REQUEST_ENABLE_BLUETOOTH);
-            } else {
-                // Request Bluetooth permissions or inform the user
-                ActivityCompat.requestPermissions(this,
-                        new String[]{Manifest.permission.BLUETOOTH_CONNECT},
-                        PERMISSION_REQUEST_CODE);
-            }
+    private void discoverDevices() {
+        if (ActivityCompat.checkSelfPermission(this, Manifest.permission.BLUETOOTH_SCAN) != PackageManager.PERMISSION_GRANTED) {
+            return;
         }
+        if (bluetoothAdapter.isDiscovering()) {
+            bluetoothAdapter.cancelDiscovery();
+        }
+        bluetoothAdapter.startDiscovery();
     }
 
-    private void ensureDiscoverable() {
-        if (ContextCompat.checkSelfPermission(this, Manifest.permission.BLUETOOTH_SCAN) == PackageManager.PERMISSION_GRANTED) {
-            if (bluetoothAdapter.getScanMode() != BluetoothAdapter.SCAN_MODE_CONNECTABLE_DISCOVERABLE) {
-                Intent discoverableIntent = new Intent(BluetoothAdapter.ACTION_REQUEST_DISCOVERABLE);
-                discoverableIntent.putExtra(BluetoothAdapter.EXTRA_DISCOVERABLE_DURATION, 300); // 5 minutes
-                startActivityForResult(discoverableIntent, REQUEST_DISCOVERABLE_BLUETOOTH);
-            }
-        } else {
-            // Request Bluetooth permissions or inform the user
-            ActivityCompat.requestPermissions(this,
-                    new String[]{Manifest.permission.BLUETOOTH_SCAN},
-                    PERMISSION_REQUEST_CODE);
-        }
+    private void connectToDevice(BluetoothDevice device) {
+        ConnectTask connectTask = new ConnectTask(device);
+        connectTask.execute();
     }
 
     private void sendMessage() {
         String message = messageEditText.getText().toString();
         if (!message.isEmpty()) {
-            // Implement logic to send the message to all connected devices
-            // You might need to iterate through the list of discovered devices and send the message using BluetoothSocket and OutputStream
-            // Display the sent message in the chatTextView
-            chatTextView.append("You: " + message + "\n");
-            messageEditText.setText("");
+            SendTask sendTask = new SendTask(message);
+            sendTask.execute();
         }
     }
 
@@ -127,16 +130,10 @@ public class MainActivity extends AppCompatActivity {
                 BluetoothDevice device = intent.getParcelableExtra(BluetoothDevice.EXTRA_DEVICE);
                 if (!discoveredDevices.contains(device)) {
                     discoveredDevices.add(device);
-                    // Implement logic to receive and display the message from the discovered device
-                    // You might need to use BluetoothSocket and InputStream
-                    if (ContextCompat.checkSelfPermission(MainActivity.this, Manifest.permission.BLUETOOTH_CONNECT) == PackageManager.PERMISSION_GRANTED) {
-                        chatTextView.append(device.getName() + ": " + "Hello, I'm here!" + "\n");
-                    } else {
-                        // Request Bluetooth permissions or inform the user
-                        ActivityCompat.requestPermissions(MainActivity.this,
-                                new String[]{Manifest.permission.BLUETOOTH_CONNECT},
-                                PERMISSION_REQUEST_CODE);
+                    if (ContextCompat.checkSelfPermission(MainActivity.this, Manifest.permission.BLUETOOTH_CONNECT) != PackageManager.PERMISSION_GRANTED) {
+                        return;
                     }
+                    discoveredDevicesAdapter.add(device.getName() + "\n" + device.getAddress());
                 }
             }
         }
@@ -146,19 +143,80 @@ public class MainActivity extends AppCompatActivity {
     protected void onDestroy() {
         super.onDestroy();
         unregisterReceiver(receiver);
+        closeConnection();
     }
 
-    @Override
-    public void onRequestPermissionsResult(int requestCode, @NonNull String[] permissions, @NonNull int[] grantResults) {
-        super.onRequestPermissionsResult(requestCode, permissions, grantResults);
+    private void closeConnection() {
+        try {
+            if (outputStream != null) {
+                outputStream.close();
+            }
+            if (inputStream != null) {
+                inputStream.close();
+            }
+            if (clientSocket != null) {
+                clientSocket.close();
+            }
+        } catch (IOException e) {
+            e.printStackTrace();
+        }
+    }
 
-        if (requestCode == PERMISSION_REQUEST_CODE) {
-            for (int result : grantResults) {
-                if (result != PackageManager.PERMISSION_GRANTED) {
-                    Toast.makeText(this, "Bluetooth permissions are required", Toast.LENGTH_SHORT).show();
-                    finish();
-                    return;
-                }
+    private class ConnectTask extends AsyncTask<Void, Void, Boolean> {
+        private BluetoothDevice device;
+
+        ConnectTask(BluetoothDevice device) {
+            this.device = device;
+        }
+
+        @Override
+        protected Boolean doInBackground(Void... params) {
+            try {
+                clientSocket = device.createRfcommSocketToServiceRecord(MY_UUID);
+                clientSocket.connect();
+                inputStream = clientSocket.getInputStream();
+                outputStream = clientSocket.getOutputStream();
+                return true;
+            } catch (IOException e) {
+                e.printStackTrace();
+                return false;
+            }
+        }
+
+        @Override
+        protected void onPostExecute(Boolean result) {
+            if (result) {
+                Toast.makeText(MainActivity.this, "Connected to " + device.getName(), Toast.LENGTH_SHORT).show();
+            } else {
+                Toast.makeText(MainActivity.this, "Failed to connect", Toast.LENGTH_SHORT).show();
+            }
+        }
+    }
+
+    private class SendTask extends AsyncTask<Void, Void, Boolean> {
+        private String message;
+
+        SendTask(String message) {
+            this.message = message;
+        }
+
+        @Override
+        protected Boolean doInBackground(Void... params) {
+            try {
+                outputStream.write(message.getBytes());
+                return true;
+            } catch (IOException e) {
+                e.printStackTrace();
+                return false;
+            }
+        }
+
+        @Override
+        protected void onPostExecute(Boolean result) {
+            if (result) {
+                Toast.makeText(MainActivity.this, "Message sent", Toast.LENGTH_SHORT).show();
+            } else {
+                Toast.makeText(MainActivity.this, "Failed to send message", Toast.LENGTH_SHORT).show();
             }
         }
     }
